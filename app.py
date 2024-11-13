@@ -9,30 +9,25 @@ CHAT_MODEL = "@cf/qwen/qwen1.5-14b-chat-awq"
 IMAGE_MODEL = "@cf/stabilityai/stable-diffusion-xl-base-1.0"
 
 # Session data for chat history
-user_sessions = {}
+session_state = st.session_state
+if "messages" not in session_state:
+    session_state["messages"] = [{"role": "system", "content": "You are a helpful assistant."}]
 MAX_HISTORY_LENGTH = 6
 
-def get_user_session(user_id):
-    if user_id not in user_sessions:
-        user_sessions[user_id] = {"messages": [{"role": "system", "content": "You are a helpful assistant."}]}
-    return user_sessions[user_id]
+def update_session(message):
+    session_state["messages"].append({"role": "user", "content": message})
+    if len(session_state["messages"]) > MAX_HISTORY_LENGTH:
+        session_state["messages"].pop(1)  # Keep only the latest messages
 
-def update_user_session(user_id, message):
-    session = get_user_session(user_id)
-    session["messages"].append({"role": "user", "content": message})
-    if len(session["messages"]) > MAX_HISTORY_LENGTH:
-        session["messages"].pop(1)  # Keep only the latest messages
-
-def gpt_response(user_id, prompt):
-    session = get_user_session(user_id)
-    update_user_session(user_id, prompt)
+def gpt_response(prompt):
+    update_session(prompt)
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
     data = {
         "max_tokens": 1024,
-        "messages": session["messages"]
+        "messages": session_state["messages"]
     }
     response = requests.post(
         f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{CHAT_MODEL}",
@@ -42,16 +37,18 @@ def gpt_response(user_id, prompt):
     result = response.json()
     answer = result.get("result", {}).get("response")
     if answer:
-        session["messages"].append({"role": "assistant", "content": answer})
+        session_state["messages"].append({"role": "assistant", "content": answer})
         return answer
     return "No response from GPT model"
 
-def generate_image(prompt):
+def generate_image(prompt, nsfw=False):
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json"
     }
     data = {"prompt": prompt}
+    if nsfw:
+        data["nsfw"] = True
     response = requests.post(
         f"https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/run/{IMAGE_MODEL}",
         headers=headers,
@@ -62,9 +59,6 @@ def generate_image(prompt):
 # Streamlit Interface
 st.title("AI Assistant - GPT and Image Generation")
 
-# User ID input for session tracking
-user_id = st.text_input("Enter your User ID", key="user_id")
-
 # Select command type (Chat or Image Generation)
 command_type = st.selectbox("Select Command", ["Chat", "Image Generation"])
 
@@ -72,21 +66,23 @@ if command_type == "Chat":
     # Chat mode
     prompt = st.text_area("Enter your message", height=150)
     if st.button("Get Response"):
-        if user_id and prompt:
-            response = gpt_response(user_id, prompt)
+        if prompt:
+            response = gpt_response(prompt)
             st.write(response)
         else:
-            st.write("Please enter a valid User ID and message.")
+            st.write("Please enter a message.")
 
 elif command_type == "Image Generation":
     # Image generation mode
     image_prompt = st.text_input("Enter image description")
+    nsfw_option = st.checkbox("Enable NSFW content")
     if st.button("Generate Image"):
         if image_prompt:
-            image_content = generate_image(image_prompt)
+            image_content = generate_image(image_prompt, nsfw=nsfw_option)
             if isinstance(image_content, bytes):
                 st.image(image_content, caption="Generated Image")
             else:
                 st.write(image_content)
         else:
             st.write("Please enter a description for the image.")
+            
